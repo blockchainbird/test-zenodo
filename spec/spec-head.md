@@ -1,10 +1,10 @@
 # Zenodo DOI Test Specification
 
-**Specification Status**: v0.1 (test)
+**Specification Status**: v0.2 (test)
 
 **DOI**
 
-<https://doi.org/10.5281/zenodo.21759354>
+<https://doi.org/10.5281/zenodo.21759353>
 
 **Latest Draft:**
 

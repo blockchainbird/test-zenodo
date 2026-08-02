@@ -14,6 +14,8 @@
 
 * Blockchain Bird (test)
 
+This line is an addition for testing if the Zenodo GitHub Action Workflow works. Let's make a release 0.3.0
+
 ## Intro
 
 This is a Spec-Up-T installation used to test automating Zenodo DOI **updates**

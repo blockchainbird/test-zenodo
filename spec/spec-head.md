@@ -4,9 +4,7 @@
 
 **DOI**
 
-<!-- Placeholder: replace with reserved Zenodo Version DOI before first publish,
-     then prefer the Concept DOI (main ID) after the first publish. -->
-<!-- DOI_PLACEHOLDER -->
+<https://doi.org/10.5281/zenodo.21759354>
 
 **Latest Draft:**
 

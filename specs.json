@@ -1,0 +1,40 @@
+{
+    "specs": [
+        {
+            "title": "Zenodo DOI Test Specification",
+            "description": "Test repository for automating Spec-Up-T Zenodo DOI update publishes via GitHub Actions",
+            "author": "Blockchain Bird",
+            "spec_directory": "./spec",
+            "spec_terms_directory": "terms-definitions",
+            "output_path": "./docs",
+            "markdown_paths": [
+                "spec-head.md",
+                "terms-and-definitions-intro.md",
+                "example-markup-in-markdown.md",
+                "spec-body.md"
+            ],
+            "logo": "https://raw.githubusercontent.com/trustoverip/spec-up-t/refs/heads/master/src/install-from-boilerplate/boilerplate/static/logo.svg",
+            "logo_link": "https://github.com/blockchainbird/test-zenodo",
+            "favicon": "https://raw.githubusercontent.com/trustoverip/spec-up-t/refs/heads/master/src/install-from-boilerplate/boilerplate/static/favicon.ico",
+            "source": {
+                "host": "github",
+                "account": "blockchainbird",
+                "repo": "test-zenodo"
+            },
+            "external_specs": [
+                {
+                    "external_spec": "ExtRef1",
+                    "gh_page": "https://trustoverip.github.io/spec-up-t-demo-external-ref-1/",
+                    "url": "https://github.com/trustoverip/spec-up-t-demo-external-ref-1"
+                },
+                {
+                    "external_spec": "ExtRef2",
+                    "gh_page": "https://trustoverip.github.io/spec-up-t-demo-external-ref-2/",
+                    "url": "https://github.com/trustoverip/spec-up-t-demo-external-ref-2"
+                }
+            ],
+            "katex": false,
+            "anchor_symbol": "§"
+        }
+    ]
+}

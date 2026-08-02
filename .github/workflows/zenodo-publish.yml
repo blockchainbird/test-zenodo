@@ -1,0 +1,183 @@
+name: Publish release to Zenodo (update)
+
+# Automates the Zenodo *update* path only (New version → upload ZIP → publish).
+# First-time DOI creation (reserve DOI, embed in source, first publish) stays manual:
+# https://trustoverip.github.io/spec-up-t-website/docs/developer-documentation/create-zenodo-doi
+#
+# Required repository secrets:
+#   ZENODO_TOKEN          — Zenodo personal access token (deposit:write + deposit:actions)
+#   ZENODO_DEPOSITION_ID  — numeric ID of the *latest published* Zenodo version
+#                           (not the Concept DOI number). Update this after the first
+#                           publish, or leave it and let the workflow resolve via
+#                           ZENODO_CONCEPT_DOI if set.
+#
+# Optional repository variables/secrets:
+#   ZENODO_CONCEPT_DOI    — e.g. 10.5281/zenodo.XXXXXXXX (Concept / main ID).
+#                           If set and ZENODO_DEPOSITION_ID is empty, the workflow
+#                           resolves the latest published deposition from it.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish (defaults to latest release)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zenodo-publish-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  zenodo-new-version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check secrets
+        env:
+          ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
+          ZENODO_DEPOSITION_ID: ${{ secrets.ZENODO_DEPOSITION_ID }}
+          ZENODO_CONCEPT_DOI: ${{ vars.ZENODO_CONCEPT_DOI }}
+        run: |
+          if [ -z "$ZENODO_TOKEN" ]; then
+            echo "::error::Missing secret ZENODO_TOKEN. Create one at https://zenodo.org/account/settings/applications/tokens/new/ (scopes: deposit:write, deposit:actions)."
+            exit 1
+          fi
+          if [ -z "$ZENODO_DEPOSITION_ID" ] && [ -z "$ZENODO_CONCEPT_DOI" ]; then
+            echo "::error::Set secret ZENODO_DEPOSITION_ID (latest published version ID) or variable ZENODO_CONCEPT_DOI."
+            exit 1
+          fi
+
+      - name: Resolve release asset
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_TAG:-}" ]; then
+            TAG="$INPUT_TAG"
+          elif [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+          else
+            TAG=$(gh api "repos/${{ github.repository }}/releases/latest" --jq .tag_name)
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          # Prefer the GitHub-generated source ZIP for the release tag.
+          API="https://api.github.com/repos/${{ github.repository }}/zipball/${TAG}"
+          OUT="release-${TAG}.zip"
+          curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            -L "$API" -o "$OUT"
+          echo "zip_path=$OUT" >> "$GITHUB_OUTPUT"
+          echo "zip_name=$(basename "$OUT")" >> "$GITHUB_OUTPUT"
+          ls -lh "$OUT"
+
+      - name: Resolve latest Zenodo deposition ID
+        id: zenodo
+        env:
+          ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
+          ZENODO_DEPOSITION_ID: ${{ secrets.ZENODO_DEPOSITION_ID }}
+          ZENODO_CONCEPT_DOI: ${{ vars.ZENODO_CONCEPT_DOI }}
+        run: |
+          set -euo pipefail
+          AUTH="Authorization: Bearer ${ZENODO_TOKEN}"
+
+          if [ -n "${ZENODO_DEPOSITION_ID:-}" ]; then
+            DEPOSITION_ID="$ZENODO_DEPOSITION_ID"
+            echo "Using ZENODO_DEPOSITION_ID=$DEPOSITION_ID"
+          else
+            # Concept DOI form: 10.5281/zenodo.<conceptrecid>
+            CONCEPT_ID="${ZENODO_CONCEPT_DOI##*.}"
+            echo "Resolving latest published version for concept recid=$CONCEPT_ID"
+            # Records API: concept DOI resolves to latest; deposition id == record id for published.
+            LATEST=$(curl -fsSL -H "$AUTH" \
+              "https://zenodo.org/api/records/${CONCEPT_ID}" | jq -r '.id')
+            if [ -z "$LATEST" ] || [ "$LATEST" = "null" ]; then
+              echo "::error::Could not resolve latest record for $ZENODO_CONCEPT_DOI"
+              exit 1
+            fi
+            DEPOSITION_ID="$LATEST"
+            echo "Resolved latest deposition/record id=$DEPOSITION_ID"
+          fi
+
+          echo "deposition_id=$DEPOSITION_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Create Zenodo new version, upload ZIP, publish
+        env:
+          ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
+          DEPOSITION_ID: ${{ steps.zenodo.outputs.deposition_id }}
+          ZIP_PATH: ${{ steps.release.outputs.zip_path }}
+          ZIP_NAME: ${{ steps.release.outputs.zip_name }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          AUTH="Authorization: Bearer ${ZENODO_TOKEN}"
+          API="https://zenodo.org/api"
+
+          echo "Creating new version from deposition $DEPOSITION_ID ..."
+          NEWVERSION_JSON=$(curl -fsSL -X POST -H "$AUTH" \
+            "${API}/deposit/depositions/${DEPOSITION_ID}/actions/newversion")
+
+          DRAFT_URL=$(echo "$NEWVERSION_JSON" | jq -r '.links.latest_draft')
+          if [ -z "$DRAFT_URL" ] || [ "$DRAFT_URL" = "null" ]; then
+            echo "::error::newversion did not return links.latest_draft"
+            echo "$NEWVERSION_JSON" | jq .
+            exit 1
+          fi
+
+          DRAFT_ID="${DRAFT_URL##*/}"
+          echo "Draft deposition id=$DRAFT_ID"
+
+          DRAFT_JSON=$(curl -fsSL -H "$AUTH" "${API}/deposit/depositions/${DRAFT_ID}")
+          BUCKET=$(echo "$DRAFT_JSON" | jq -r '.links.bucket')
+
+          # Remove inherited files so this version only contains the new release ZIP.
+          echo "$DRAFT_JSON" | jq -c '.files[]?' | while read -r file; do
+            FILE_ID=$(echo "$file" | jq -r '.id')
+            FILE_NAME=$(echo "$file" | jq -r '.filename')
+            echo "Removing inherited file: $FILE_NAME ($FILE_ID)"
+            curl -fsSL -X DELETE -H "$AUTH" \
+              "${API}/deposit/depositions/${DRAFT_ID}/files/${FILE_ID}" >/dev/null
+          done
+
+          echo "Uploading $ZIP_PATH to bucket ..."
+          curl -fsSL -X PUT -H "$AUTH" \
+            --upload-file "$ZIP_PATH" \
+            "${BUCKET}/${ZIP_NAME}" >/dev/null
+
+          # Bump version metadata when present.
+          META=$(echo "$DRAFT_JSON" | jq --arg v "$TAG" '
+            .metadata
+            | .version = $v
+            | del(.doi)   # let Zenodo assign the new Version DOI
+          ')
+          curl -fsSL -X PUT -H "$AUTH" -H "Content-Type: application/json" \
+            "${API}/deposit/depositions/${DRAFT_ID}" \
+            -d "$(jq -n --argjson metadata "$META" '{metadata: $metadata}')" >/dev/null
+
+          echo "Publishing deposition $DRAFT_ID ..."
+          PUBLISHED=$(curl -fsSL -X POST -H "$AUTH" \
+            "${API}/deposit/depositions/${DRAFT_ID}/actions/publish")
+
+          VERSION_DOI=$(echo "$PUBLISHED" | jq -r '.doi // .metadata.prereserve_doi.doi // empty')
+          CONCEPT_DOI=$(echo "$PUBLISHED" | jq -r '.conceptdoi // empty')
+          NEW_ID=$(echo "$PUBLISHED" | jq -r '.id')
+
+          echo "Published Zenodo version id=$NEW_ID"
+          echo "Version DOI: ${VERSION_DOI:-unknown}"
+          echo "Concept DOI: ${CONCEPT_DOI:-unknown}"
+          {
+            echo "## Zenodo publish result"
+            echo ""
+            echo "- Release tag: \`$TAG\`"
+            echo "- New deposition id: \`$NEW_ID\`"
+            echo "- Version DOI: \`${VERSION_DOI:-n/a}\`"
+            echo "- Concept DOI: \`${CONCEPT_DOI:-n/a}\`"
+            echo ""
+            echo "Update secret \`ZENODO_DEPOSITION_ID\` to \`$NEW_ID\` if you are not using \`ZENODO_CONCEPT_DOI\`."
+          } >> "$GITHUB_STEP_SUMMARY"

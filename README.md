@@ -66,7 +66,7 @@ If this record will live under an **organization** Zenodo account and you are no
    - `deposit:write`
    - `deposit:actions`
 4. Create the token and **copy it once**. Store it in a password manager.  
-5. You will paste it into GitHub Secrets in step A7. Do **not** commit it to git.
+5. You will paste it into GitHub Secrets in step **A8** (`ZENODO_TOKEN`). Do **not** commit it to git.
 
 ### A3. Reserve a DOI (keep the browser tab open)
 
@@ -147,15 +147,19 @@ On the record, note:
 
 You usually never change this line again.
 
-### A8. Wire GitHub so updates are automatic
+### A8. Wire GitHub so updates are automatic (paste the token here)
 
-In the GitHub repo: **Settings → Secrets and variables → Actions**.
+This is where the token from **A2** goes.
+
+1. Open the GitHub repo → **Settings** → **Secrets and variables** → **Actions**.  
+   Direct URL pattern: `https://github.com/OWNER/REPO/settings/secrets/actions`  
+2. Under **Repository secrets**, click **New repository secret**.
 
 #### Secret (required)
 
 | Name | Value |
 |------|--------|
-| `ZENODO_TOKEN` | The token from A2 |
+| `ZENODO_TOKEN` | Paste the token from **A2** (full string, no spaces) |
 
 #### Variable (recommended — set this and forget deposition IDs)
 

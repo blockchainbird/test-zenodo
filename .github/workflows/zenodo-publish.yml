@@ -187,8 +187,12 @@ jobs:
             echo "::error::No bucket URL on draft $DRAFT_ID"
             exit 1
           fi
+          # --http1.1 and disabling "Expect: 100-continue" avoid a runner-specific
+          # failure where Zenodo answers 400 "Empty files are not accepted"
+          # (HTTP/2 + Expect handshake drops the body behind Zenodo's proxy).
           UPLOAD_BODY=$(mktemp)
-          HTTP=$(curl -sS -o "$UPLOAD_BODY" -w "%{http_code}" -H "$AUTH" \
+          HTTP=$(curl -sS --http1.1 -o "$UPLOAD_BODY" -w "%{http_code}" -H "$AUTH" \
+            -H "Expect:" \
             --upload-file "$ZIP_PATH" \
             "${BUCKET}/${ZIP_NAME}" || true)
           echo "bucket upload HTTP $HTTP"

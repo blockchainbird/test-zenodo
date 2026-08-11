@@ -180,31 +180,23 @@ jobs:
 
           echo "Uploading $ZIP_PATH ($ZIP_NAME, $(wc -c < "$ZIP_PATH" | tr -d ' ') bytes) ..."
 
-          # Prefer multipart /files API (reliable Content-Length + filename).
+          # Bucket upload. IMPORTANT: use plain --upload-file only. Adding
+          # "-X PUT" and/or a Content-Type header makes Zenodo reject the
+          # upload (400 "Empty files are not accepted"), verified empirically.
+          if [ -z "$BUCKET" ] || [ "$BUCKET" = "null" ]; then
+            echo "::error::No bucket URL on draft $DRAFT_ID"
+            exit 1
+          fi
           UPLOAD_BODY=$(mktemp)
-          HTTP=$(curl -sS -o "$UPLOAD_BODY" -w "%{http_code}" -X POST -H "$AUTH" \
-            -F "file=@${ZIP_PATH};filename=${ZIP_NAME};type=application/zip" \
-            "${API}/deposit/depositions/${DRAFT_ID}/files" || true)
-          echo "files API upload HTTP $HTTP"
+          HTTP=$(curl -sS -o "$UPLOAD_BODY" -w "%{http_code}" -H "$AUTH" \
+            --upload-file "$ZIP_PATH" \
+            "${BUCKET}/${ZIP_NAME}" || true)
+          echo "bucket upload HTTP $HTTP"
           if [ "$HTTP" != "201" ] && [ "$HTTP" != "200" ]; then
-            echo "files API failed; response:"
+            echo "::error::Zenodo upload failed"
             cat "$UPLOAD_BODY" || true
-            echo "Trying bucket PUT fallback ..."
-            if [ -z "$BUCKET" ] || [ "$BUCKET" = "null" ]; then
-              echo "::error::No bucket URL available for fallback upload"
-              exit 1
-            fi
-            HTTP=$(curl -sS -o "$UPLOAD_BODY" -w "%{http_code}" -X PUT -H "$AUTH" \
-              -H "Content-Type: application/octet-stream" \
-              --upload-file "$ZIP_PATH" \
-              "${BUCKET}/${ZIP_NAME}" || true)
-            echo "bucket PUT HTTP $HTTP"
-            if [ "$HTTP" != "201" ] && [ "$HTTP" != "200" ]; then
-              echo "::error::Zenodo upload failed"
-              cat "$UPLOAD_BODY" || true
-              echo "::error::If a draft is stuck empty, open https://zenodo.org/deposit/${DRAFT_ID} and Discard, then re-run."
-              exit 1
-            fi
+            echo "::error::If a draft is stuck empty, open https://zenodo.org/deposit/${DRAFT_ID} and Discard, then re-run."
+            exit 1
           fi
           cat "$UPLOAD_BODY" | jq . 2>/dev/null || cat "$UPLOAD_BODY"
           rm -f "$UPLOAD_BODY"

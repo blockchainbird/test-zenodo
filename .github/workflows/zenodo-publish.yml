@@ -111,8 +111,9 @@ jobs:
             # Main ID form: 10.5281/zenodo.<mainrecid> (Zenodo: Concept DOI)
             MAIN_RECID="${ZENODO_SPEC_MAIN_DOI##*.}"
             echo "Resolving latest published version for Main ID recid=$MAIN_RECID"
-            # Records API: Main ID resolves to latest; deposition id == record id for published.
-            LATEST=$(curl -fsS -H "$AUTH" \
+            # Records API: Main ID resolves to latest via an HTTP redirect, so -L is
+            # required here (GET only; never follow redirects on POST/PUT).
+            LATEST=$(curl -fsSL -H "$AUTH" \
               "https://zenodo.org/api/records/${MAIN_RECID}" | jq -r '.id')
             if [ -z "$LATEST" ] || [ "$LATEST" = "null" ]; then
               echo "::error::Could not resolve latest record for $ZENODO_SPEC_MAIN_DOI"

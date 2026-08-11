@@ -415,6 +415,14 @@ Error mentions `ZENODO_USER_API_TOKEN`, `ZENODO_SPEC_MAIN_DOI`, or deposition id
 
 → Re-do **A8**. Token scopes must include `deposit:write` and `deposit:actions`.
 
+### Action fails: upload HTTP 400
+
+Often means: bad ZIP bytes, fragile bucket PUT, or a **stuck empty draft** from a previous failed run.
+
+1. Open https://zenodo.org/deposit/ → find the unpublished **New version** draft for this spec → **Discard**.  
+2. Ensure the fixed workflow is on `main` (multipart upload + ZIP sanity checks).  
+3. Re-run the failed Action, or publish a new release.
+
 ### Action fails: 403 / permission denied from Zenodo
 
 The repo’s `ZENODO_USER_API_TOKEN` is valid but the **Zenodo user who owns that token** cannot manage this spec’s record.

@@ -67,11 +67,25 @@ jobs:
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-          # Prefer the GitHub-generated source ZIP for the release tag.
+          # GitHub source ZIP for the tag. Do NOT send Accept: application/vnd.github+json
+          # here — that can break binary zipball downloads.
           API="https://api.github.com/repos/${{ github.repository }}/zipball/${TAG}"
           OUT="release-${TAG}.zip"
-          curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+          curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/octet-stream" \
             -L "$API" -o "$OUT"
+          SIZE=$(wc -c < "$OUT" | tr -d ' ')
+          echo "Downloaded $OUT ($SIZE bytes)"
+          if [ "$SIZE" -lt 1000 ]; then
+            echo "::error::Release ZIP is suspiciously small ($SIZE bytes). First bytes:"
+            head -c 500 "$OUT" || true
+            exit 1
+          fi
+          # ZIP local file header is PK\x03\x04
+          if ! head -c 2 "$OUT" | grep -q 'PK'; then
+            echo "::error::Downloaded file is not a ZIP (missing PK header). First bytes:"
+            head -c 200 "$OUT" || true
+            exit 1
+          fi
           echo "zip_path=$OUT" >> "$GITHUB_OUTPUT"
           echo "zip_name=$(basename "$OUT")" >> "$GITHUB_OUTPUT"
           ls -lh "$OUT"
@@ -94,7 +108,7 @@ jobs:
             MAIN_RECID="${ZENODO_SPEC_MAIN_DOI##*.}"
             echo "Resolving latest published version for Main ID recid=$MAIN_RECID"
             # Records API: Main ID resolves to latest; deposition id == record id for published.
-            LATEST=$(curl -fsSL -H "$AUTH" \
+            LATEST=$(curl -fsS -H "$AUTH" \
               "https://zenodo.org/api/records/${MAIN_RECID}" | jq -r '.id')
             if [ -z "$LATEST" ] || [ "$LATEST" = "null" ]; then
               echo "::error::Could not resolve latest record for $ZENODO_SPEC_MAIN_DOI"
@@ -119,7 +133,8 @@ jobs:
           API="https://zenodo.org/api"
 
           echo "Creating new version from deposition $DEPOSITION_ID ..."
-          NEWVERSION_JSON=$(curl -fsSL -X POST -H "$AUTH" \
+          # Do not use curl -L on Zenodo API calls (redirects break PUT/POST).
+          NEWVERSION_JSON=$(curl -fsS -X POST -H "$AUTH" \
             "${API}/deposit/depositions/${DEPOSITION_ID}/actions/newversion")
 
           DRAFT_URL=$(echo "$NEWVERSION_JSON" | jq -r '.links.latest_draft')
@@ -132,22 +147,62 @@ jobs:
           DRAFT_ID="${DRAFT_URL##*/}"
           echo "Draft deposition id=$DRAFT_ID"
 
-          DRAFT_JSON=$(curl -fsSL -H "$AUTH" "${API}/deposit/depositions/${DRAFT_ID}")
+          DRAFT_JSON=$(curl -fsS -H "$AUTH" "${API}/deposit/depositions/${DRAFT_ID}")
           BUCKET=$(echo "$DRAFT_JSON" | jq -r '.links.bucket')
+          echo "Bucket: $BUCKET"
 
-          # Remove inherited files so this version only contains the new release ZIP.
+          # Remove inherited files (old files API) so this version only has the new ZIP.
           echo "$DRAFT_JSON" | jq -c '.files[]?' | while read -r file; do
-            FILE_ID=$(echo "$file" | jq -r '.id')
-            FILE_NAME=$(echo "$file" | jq -r '.filename')
-            echo "Removing inherited file: $FILE_NAME ($FILE_ID)"
-            curl -fsSL -X DELETE -H "$AUTH" \
-              "${API}/deposit/depositions/${DRAFT_ID}/files/${FILE_ID}" >/dev/null
+            [ -z "$file" ] || [ "$file" = "null" ] && continue
+            FILE_ID=$(echo "$file" | jq -r '.id // empty')
+            FILE_NAME=$(echo "$file" | jq -r '.filename // .key // empty')
+            if [ -n "$FILE_ID" ]; then
+              echo "Removing inherited file via files API: $FILE_NAME ($FILE_ID)"
+              curl -fsS -X DELETE -H "$AUTH" \
+                "${API}/deposit/depositions/${DRAFT_ID}/files/${FILE_ID}" >/dev/null || true
+            fi
+            # Also try bucket DELETE by key (newer files API)
+            if [ -n "$FILE_NAME" ] && [ -n "$BUCKET" ] && [ "$BUCKET" != "null" ]; then
+              echo "Removing inherited file via bucket: $FILE_NAME"
+              curl -sS -o /dev/null -w "bucket_delete_http=%{http_code}\n" -X DELETE -H "$AUTH" \
+                "${BUCKET}/${FILE_NAME}" || true
+            fi
           done
 
-          echo "Uploading $ZIP_PATH to bucket ..."
-          curl -fsSL -X PUT -H "$AUTH" \
-            --upload-file "$ZIP_PATH" \
-            "${BUCKET}/${ZIP_NAME}" >/dev/null
+          # Refresh draft after deletes
+          DRAFT_JSON=$(curl -fsS -H "$AUTH" "${API}/deposit/depositions/${DRAFT_ID}")
+          BUCKET=$(echo "$DRAFT_JSON" | jq -r '.links.bucket')
+
+          echo "Uploading $ZIP_PATH ($ZIP_NAME, $(wc -c < "$ZIP_PATH" | tr -d ' ') bytes) ..."
+
+          # Prefer multipart /files API (reliable Content-Length + filename).
+          UPLOAD_BODY=$(mktemp)
+          HTTP=$(curl -sS -o "$UPLOAD_BODY" -w "%{http_code}" -X POST -H "$AUTH" \
+            -F "file=@${ZIP_PATH};filename=${ZIP_NAME};type=application/zip" \
+            "${API}/deposit/depositions/${DRAFT_ID}/files" || true)
+          echo "files API upload HTTP $HTTP"
+          if [ "$HTTP" != "201" ] && [ "$HTTP" != "200" ]; then
+            echo "files API failed; response:"
+            cat "$UPLOAD_BODY" || true
+            echo "Trying bucket PUT fallback ..."
+            if [ -z "$BUCKET" ] || [ "$BUCKET" = "null" ]; then
+              echo "::error::No bucket URL available for fallback upload"
+              exit 1
+            fi
+            HTTP=$(curl -sS -o "$UPLOAD_BODY" -w "%{http_code}" -X PUT -H "$AUTH" \
+              -H "Content-Type: application/octet-stream" \
+              --upload-file "$ZIP_PATH" \
+              "${BUCKET}/${ZIP_NAME}" || true)
+            echo "bucket PUT HTTP $HTTP"
+            if [ "$HTTP" != "201" ] && [ "$HTTP" != "200" ]; then
+              echo "::error::Zenodo upload failed"
+              cat "$UPLOAD_BODY" || true
+              echo "::error::If a draft is stuck empty, open https://zenodo.org/deposit/${DRAFT_ID} and Discard, then re-run."
+              exit 1
+            fi
+          fi
+          cat "$UPLOAD_BODY" | jq . 2>/dev/null || cat "$UPLOAD_BODY"
+          rm -f "$UPLOAD_BODY"
 
           # Bump version metadata when present.
           META=$(echo "$DRAFT_JSON" | jq --arg v "$TAG" '
@@ -155,12 +210,12 @@ jobs:
             | .version = $v
             | del(.doi)   # let Zenodo assign the new Version DOI (Sub-ID)
           ')
-          curl -fsSL -X PUT -H "$AUTH" -H "Content-Type: application/json" \
+          curl -fsS -X PUT -H "$AUTH" -H "Content-Type: application/json" \
             "${API}/deposit/depositions/${DRAFT_ID}" \
             -d "$(jq -n --argjson metadata "$META" '{metadata: $metadata}')" >/dev/null
 
           echo "Publishing deposition $DRAFT_ID ..."
-          PUBLISHED=$(curl -fsSL -X POST -H "$AUTH" \
+          PUBLISHED=$(curl -fsS -X POST -H "$AUTH" \
             "${API}/deposit/depositions/${DRAFT_ID}/actions/publish")
 
           VERSION_DOI=$(echo "$PUBLISHED" | jq -r '.doi // .metadata.prereserve_doi.doi // empty')

@@ -156,21 +156,15 @@ jobs:
           BUCKET=$(echo "$DRAFT_JSON" | jq -r '.links.bucket')
           echo "Bucket: $BUCKET"
 
-          # Remove inherited files (old files API) so this version only has the new ZIP.
+          # Remove inherited files (files API only) so this version only has the new ZIP.
           echo "$DRAFT_JSON" | jq -c '.files[]?' | while read -r file; do
             [ -z "$file" ] || [ "$file" = "null" ] && continue
             FILE_ID=$(echo "$file" | jq -r '.id // empty')
             FILE_NAME=$(echo "$file" | jq -r '.filename // .key // empty')
             if [ -n "$FILE_ID" ]; then
-              echo "Removing inherited file via files API: $FILE_NAME ($FILE_ID)"
+              echo "Removing inherited file: $FILE_NAME ($FILE_ID)"
               curl -fsS -X DELETE -H "$AUTH" \
                 "${API}/deposit/depositions/${DRAFT_ID}/files/${FILE_ID}" >/dev/null || true
-            fi
-            # Also try bucket DELETE by key (newer files API)
-            if [ -n "$FILE_NAME" ] && [ -n "$BUCKET" ] && [ "$BUCKET" != "null" ]; then
-              echo "Removing inherited file via bucket: $FILE_NAME"
-              curl -sS -o /dev/null -w "bucket_delete_http=%{http_code}\n" -X DELETE -H "$AUTH" \
-                "${BUCKET}/${FILE_NAME}" || true
             fi
           done
 
@@ -179,28 +173,39 @@ jobs:
           BUCKET=$(echo "$DRAFT_JSON" | jq -r '.links.bucket')
 
           echo "Uploading $ZIP_PATH ($ZIP_NAME, $(wc -c < "$ZIP_PATH" | tr -d ' ') bytes) ..."
+          curl --version | head -1
+          file "$ZIP_PATH" || true
 
-          # Bucket upload. IMPORTANT: use plain --upload-file only. Adding
-          # "-X PUT" and/or a Content-Type header makes Zenodo reject the
-          # upload (400 "Empty files are not accepted"), verified empirically.
-          if [ -z "$BUCKET" ] || [ "$BUCKET" = "null" ]; then
-            echo "::error::No bucket URL on draft $DRAFT_ID"
-            exit 1
-          fi
-          # --http1.1 and disabling "Expect: 100-continue" avoid a runner-specific
-          # failure where Zenodo answers 400 "Empty files are not accepted"
-          # (HTTP/2 + Expect handshake drops the body behind Zenodo's proxy).
           UPLOAD_BODY=$(mktemp)
-          HTTP=$(curl -sS --http1.1 -o "$UPLOAD_BODY" -w "%{http_code}" -H "$AUTH" \
-            -H "Expect:" \
-            --upload-file "$ZIP_PATH" \
-            "${BUCKET}/${ZIP_NAME}" || true)
-          echo "bucket upload HTTP $HTTP"
+
+          # Primary: legacy files API. Requires BOTH multipart fields:
+          # "name" (target filename) and "file" (content).
+          HTTP=$(curl -sS -o "$UPLOAD_BODY" -w "%{http_code}" -H "$AUTH" \
+            -F "name=${ZIP_NAME}" \
+            -F "file=@${ZIP_PATH}" \
+            "${API}/deposit/depositions/${DRAFT_ID}/files" || true)
+          echo "files API upload HTTP $HTTP"
+
           if [ "$HTTP" != "201" ] && [ "$HTTP" != "200" ]; then
-            echo "::error::Zenodo upload failed"
+            echo "files API response:"
             cat "$UPLOAD_BODY" || true
-            echo "::error::If a draft is stuck empty, open https://zenodo.org/deposit/${DRAFT_ID} and Discard, then re-run."
-            exit 1
+            echo "Falling back to bucket PUT (verbose) ..."
+            if [ -z "$BUCKET" ] || [ "$BUCKET" = "null" ]; then
+              echo "::error::No bucket URL on draft $DRAFT_ID"
+              exit 1
+            fi
+            # Verbose so the exact request headers appear in the log
+            # (the token is a registered secret and gets masked).
+            HTTP=$(curl -sSv -o "$UPLOAD_BODY" -w "%{http_code}" -H "$AUTH" \
+              --upload-file "$ZIP_PATH" \
+              "${BUCKET}/${ZIP_NAME}" || true)
+            echo "bucket upload HTTP $HTTP"
+            if [ "$HTTP" != "201" ] && [ "$HTTP" != "200" ]; then
+              echo "::error::Zenodo upload failed"
+              cat "$UPLOAD_BODY" || true
+              echo "::error::If a draft is stuck empty, open https://zenodo.org/deposit/${DRAFT_ID} and Discard, then re-run."
+              exit 1
+            fi
           fi
           cat "$UPLOAD_BODY" | jq . 2>/dev/null || cat "$UPLOAD_BODY"
           rm -f "$UPLOAD_BODY"

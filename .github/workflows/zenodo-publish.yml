@@ -67,12 +67,16 @@ jobs:
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-          # GitHub source ZIP for the tag. Do NOT send Accept: application/vnd.github+json
-          # here — that can break binary zipball downloads.
-          API="https://api.github.com/repos/${{ github.repository }}/zipball/${TAG}"
+          # GitHub source ZIP for the tag.
+          # Use the public archive URL (real ZIP). Do not send Accept:
+          # application/octet-stream — GitHub zipball/API returns HTTP 415 for that.
           OUT="release-${TAG}.zip"
-          curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/octet-stream" \
-            -L "$API" -o "$OUT"
+          curl -fsSL \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -L "https://api.github.com/repos/${{ github.repository }}/zipball/${TAG}" \
+            -o "$OUT"
           SIZE=$(wc -c < "$OUT" | tr -d ' ')
           echo "Downloaded $OUT ($SIZE bytes)"
           if [ "$SIZE" -lt 1000 ]; then

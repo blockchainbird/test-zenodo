@@ -4,17 +4,16 @@ name: Publish release to Zenodo (update)
 # First-time DOI creation (reserve DOI, embed in source, first publish) stays manual:
 # https://trustoverip.github.io/spec-up-t-website/docs/developer-documentation/create-zenodo-doi
 #
-# Required repository secrets:
-#   ZENODO_TOKEN          — Zenodo personal access token (deposit:write + deposit:actions)
-#   ZENODO_DEPOSITION_ID  — numeric ID of the *latest published* Zenodo version
-#                           (not the Concept DOI number). Update this after the first
-#                           publish, or leave it and let the workflow resolve via
-#                           ZENODO_CONCEPT_DOI if set.
+# Required:
+#   ZENODO_USER_API_TOKEN   — secret; Zenodo personal access token of a Zenodo *user*
+#                             (scopes: deposit:write + deposit:actions). Bound to that user.
+#   ZENODO_SPEC_MAIN_DOI    — variable (preferred); this specification’s stable Main ID,
+#                             e.g. 10.5281/zenodo.XXXXXXXX. Bound to this spec / repo.
+#                             (Zenodo’s UI may call this the Concept DOI.)
 #
-# Optional repository variables/secrets:
-#   ZENODO_CONCEPT_DOI    — e.g. 10.5281/zenodo.XXXXXXXX (Concept / main ID).
-#                           If set and ZENODO_DEPOSITION_ID is empty, the workflow
-#                           resolves the latest published deposition from it.
+# Optional:
+#   ZENODO_SPEC_LATEST_DEPOSITION_ID — secret; numeric id of the latest published version.
+#                             Only needed if ZENODO_SPEC_MAIN_DOI is not set. Prefer Main DOI.
 
 on:
   release:
@@ -39,16 +38,16 @@ jobs:
     steps:
       - name: Check secrets
         env:
-          ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
-          ZENODO_DEPOSITION_ID: ${{ secrets.ZENODO_DEPOSITION_ID }}
-          ZENODO_CONCEPT_DOI: ${{ vars.ZENODO_CONCEPT_DOI }}
+          ZENODO_USER_API_TOKEN: ${{ secrets.ZENODO_USER_API_TOKEN }}
+          ZENODO_SPEC_LATEST_DEPOSITION_ID: ${{ secrets.ZENODO_SPEC_LATEST_DEPOSITION_ID }}
+          ZENODO_SPEC_MAIN_DOI: ${{ vars.ZENODO_SPEC_MAIN_DOI }}
         run: |
-          if [ -z "$ZENODO_TOKEN" ]; then
-            echo "::error::Missing secret ZENODO_TOKEN. Create one at https://zenodo.org/account/settings/applications/tokens/new/ (scopes: deposit:write, deposit:actions)."
+          if [ -z "$ZENODO_USER_API_TOKEN" ]; then
+            echo "::error::Missing secret ZENODO_USER_API_TOKEN (Zenodo user API token). Create one at https://zenodo.org/account/settings/applications/tokens/new/ (scopes: deposit:write, deposit:actions)."
             exit 1
           fi
-          if [ -z "$ZENODO_DEPOSITION_ID" ] && [ -z "$ZENODO_CONCEPT_DOI" ]; then
-            echo "::error::Set secret ZENODO_DEPOSITION_ID (latest published version ID) or variable ZENODO_CONCEPT_DOI."
+          if [ -z "$ZENODO_SPEC_LATEST_DEPOSITION_ID" ] && [ -z "$ZENODO_SPEC_MAIN_DOI" ]; then
+            echo "::error::Set variable ZENODO_SPEC_MAIN_DOI (this spec’s Main ID) or secret ZENODO_SPEC_LATEST_DEPOSITION_ID."
             exit 1
           fi
 
@@ -80,43 +79,43 @@ jobs:
       - name: Resolve latest Zenodo deposition ID
         id: zenodo
         env:
-          ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
-          ZENODO_DEPOSITION_ID: ${{ secrets.ZENODO_DEPOSITION_ID }}
-          ZENODO_CONCEPT_DOI: ${{ vars.ZENODO_CONCEPT_DOI }}
+          ZENODO_USER_API_TOKEN: ${{ secrets.ZENODO_USER_API_TOKEN }}
+          ZENODO_SPEC_LATEST_DEPOSITION_ID: ${{ secrets.ZENODO_SPEC_LATEST_DEPOSITION_ID }}
+          ZENODO_SPEC_MAIN_DOI: ${{ vars.ZENODO_SPEC_MAIN_DOI }}
         run: |
           set -euo pipefail
-          AUTH="Authorization: Bearer ${ZENODO_TOKEN}"
+          AUTH="Authorization: Bearer ${ZENODO_USER_API_TOKEN}"
 
-          if [ -n "${ZENODO_DEPOSITION_ID:-}" ]; then
-            DEPOSITION_ID="$ZENODO_DEPOSITION_ID"
-            echo "Using ZENODO_DEPOSITION_ID=$DEPOSITION_ID"
+          if [ -n "${ZENODO_SPEC_LATEST_DEPOSITION_ID:-}" ]; then
+            DEPOSITION_ID="$ZENODO_SPEC_LATEST_DEPOSITION_ID"
+            echo "Using ZENODO_SPEC_LATEST_DEPOSITION_ID=$DEPOSITION_ID"
           else
-            # Concept DOI form: 10.5281/zenodo.<conceptrecid>
-            CONCEPT_ID="${ZENODO_CONCEPT_DOI##*.}"
-            echo "Resolving latest published version for concept recid=$CONCEPT_ID"
-            # Records API: concept DOI resolves to latest; deposition id == record id for published.
+            # Main ID form: 10.5281/zenodo.<mainrecid> (Zenodo: Concept DOI)
+            MAIN_RECID="${ZENODO_SPEC_MAIN_DOI##*.}"
+            echo "Resolving latest published version for Main ID recid=$MAIN_RECID"
+            # Records API: Main ID resolves to latest; deposition id == record id for published.
             LATEST=$(curl -fsSL -H "$AUTH" \
-              "https://zenodo.org/api/records/${CONCEPT_ID}" | jq -r '.id')
+              "https://zenodo.org/api/records/${MAIN_RECID}" | jq -r '.id')
             if [ -z "$LATEST" ] || [ "$LATEST" = "null" ]; then
-              echo "::error::Could not resolve latest record for $ZENODO_CONCEPT_DOI"
+              echo "::error::Could not resolve latest record for $ZENODO_SPEC_MAIN_DOI"
               exit 1
             fi
             DEPOSITION_ID="$LATEST"
-            echo "Resolved latest deposition/record id=$DEPOSITION_ID"
+            echo "Resolved latest deposition id=$DEPOSITION_ID"
           fi
 
           echo "deposition_id=$DEPOSITION_ID" >> "$GITHUB_OUTPUT"
 
       - name: Create Zenodo new version, upload ZIP, publish
         env:
-          ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
+          ZENODO_USER_API_TOKEN: ${{ secrets.ZENODO_USER_API_TOKEN }}
           DEPOSITION_ID: ${{ steps.zenodo.outputs.deposition_id }}
           ZIP_PATH: ${{ steps.release.outputs.zip_path }}
           ZIP_NAME: ${{ steps.release.outputs.zip_name }}
           TAG: ${{ steps.release.outputs.tag }}
         run: |
           set -euo pipefail
-          AUTH="Authorization: Bearer ${ZENODO_TOKEN}"
+          AUTH="Authorization: Bearer ${ZENODO_USER_API_TOKEN}"
           API="https://zenodo.org/api"
 
           echo "Creating new version from deposition $DEPOSITION_ID ..."
@@ -154,7 +153,7 @@ jobs:
           META=$(echo "$DRAFT_JSON" | jq --arg v "$TAG" '
             .metadata
             | .version = $v
-            | del(.doi)   # let Zenodo assign the new Version DOI
+            | del(.doi)   # let Zenodo assign the new Version DOI (Sub-ID)
           ')
           curl -fsSL -X PUT -H "$AUTH" -H "Content-Type: application/json" \
             "${API}/deposit/depositions/${DRAFT_ID}" \
@@ -165,19 +164,19 @@ jobs:
             "${API}/deposit/depositions/${DRAFT_ID}/actions/publish")
 
           VERSION_DOI=$(echo "$PUBLISHED" | jq -r '.doi // .metadata.prereserve_doi.doi // empty')
-          CONCEPT_DOI=$(echo "$PUBLISHED" | jq -r '.conceptdoi // empty')
+          MAIN_DOI=$(echo "$PUBLISHED" | jq -r '.conceptdoi // empty')
           NEW_ID=$(echo "$PUBLISHED" | jq -r '.id')
 
           echo "Published Zenodo version id=$NEW_ID"
-          echo "Version DOI: ${VERSION_DOI:-unknown}"
-          echo "Concept DOI: ${CONCEPT_DOI:-unknown}"
+          echo "Sub-ID (Version DOI): ${VERSION_DOI:-unknown}"
+          echo "Main ID: ${MAIN_DOI:-unknown}"
           {
             echo "## Zenodo publish result"
             echo ""
             echo "- Release tag: \`$TAG\`"
             echo "- New deposition id: \`$NEW_ID\`"
-            echo "- Version DOI: \`${VERSION_DOI:-n/a}\`"
-            echo "- Concept DOI: \`${CONCEPT_DOI:-n/a}\`"
+            echo "- Sub-ID (Version DOI): \`${VERSION_DOI:-n/a}\`"
+            echo "- Main ID: \`${MAIN_DOI:-n/a}\`"
             echo ""
-            echo "Update secret \`ZENODO_DEPOSITION_ID\` to \`$NEW_ID\` if you are not using \`ZENODO_CONCEPT_DOI\`."
+            echo "Update secret \`ZENODO_SPEC_LATEST_DEPOSITION_ID\` to \`$NEW_ID\` only if you are **not** using \`ZENODO_SPEC_MAIN_DOI\`."
           } >> "$GITHUB_STEP_SUMMARY"

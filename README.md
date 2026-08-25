@@ -47,14 +47,14 @@ Example from this test repo:
 | Later updates (new GitHub Release → Zenodo “New version”)                           | **GitHub Action** (automatic) |
 
 
-Workflow file: `.github/workflows/zenodo-publish.yml`  
+Workflow file: `.github/workflows/zenodo-update.yml`  
 Trigger: publishing a GitHub **Release** (or manual `workflow_dispatch`).
 
 **Do not** run the Action for the first publish. It only does *updates*.
 
 ### Copy the workflow to another Spec-Up-T repo
 
-Copy `.github/workflows/zenodo-publish.yml` **unchanged**. It has no hardcoded repo name or DOI.
+Copy `.github/workflows/zenodo-update.yml` **unchanged**. It has no hardcoded repo name or DOI.
 
 Then in **that** repo, under **Settings → Secrets and variables → Actions**:
 
@@ -161,7 +161,7 @@ Use **one shared Zenodo service approach** (simplest for releasers):
   | `kswg-cesr-specification` | same shared token              | CESR Main ID only                                  |
   | `kswg-keri-specification` | same shared token              | KERI Main ID only                                  |
 
-5. Add `.github/workflows/zenodo-publish.yml` to each repo (copy unchanged from this test repo, or via boilerplate).
+5. Add `.github/workflows/zenodo-update.yml` to each repo (copy unchanged from this test repo, or via boilerplate).
 
 After that, **Samuel or Philip** (or any other trusted releaser):
 
@@ -344,7 +344,7 @@ Open the **Variables** tab on the same Settings page → **New repository variab
 
 Prefer `ZENODO_SPEC_MAIN_DOI`. Then you do not need to bump `ZENODO_SPEC_LATEST_DEPOSITION_ID` after every release.
 
-Confirm `.github/workflows/zenodo-publish.yml` exists on `main` (it does in this test repo).
+Confirm `.github/workflows/zenodo-update.yml` exists on `main` (it does in this test repo).
 
 #### Migrating from old names (this test repo only)
 
@@ -374,7 +374,7 @@ You do **not** open Zenodo for normal updates.
 
 Check:
 
-- Actions tab → latest run of `zenodo-publish.yml` → success  
+- Actions tab → latest run of `zenodo-update.yml` → success  
 - [https://doi.org/YOUR_MAIN_ID](https://doi.org/YOUR_MAIN_ID) → shows the new version
 
 CLI equivalent:
@@ -384,7 +384,7 @@ git checkout main
 git pull
 # ... commits already on main ...
 gh release create v0.2.0 --title "v0.2.0" --notes "…" --target main
-gh run list --workflow=zenodo-publish.yml --limit 1
+gh run list --workflow=zenodo-update.yml --limit 1
 ```
 
 ---
@@ -510,7 +510,7 @@ Use this on the Zenodo draft if you want zero thinking:
 | First Sub-ID (`v0.1.0`, manual)  | [https://doi.org/10.5281/zenodo.21759354](https://doi.org/10.5281/zenodo.21759354)             |
 | Second Sub-ID (`v0.2.0`, Action) | [https://doi.org/10.5281/zenodo.21759414](https://doi.org/10.5281/zenodo.21759414)             |
 | Later Sub-ID (`v0.11.0`, Action) | [https://doi.org/10.5281/zenodo.22093110](https://doi.org/10.5281/zenodo.22093110)             |
-| Workflow                         | `.github/workflows/zenodo-publish.yml`                                                         |
+| Workflow                         | `.github/workflows/zenodo-update.yml`                                                         |
 | Spec DOI line                    | `spec/spec-head.md`                                                                            |
 
 

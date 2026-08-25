@@ -29,7 +29,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: zenodo-publish-${{ github.repository }}
+  group: zenodo-update-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:

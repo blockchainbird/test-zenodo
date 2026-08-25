@@ -24,7 +24,7 @@ Example from this test repo:
 
 - Main ID: `10.5281/zenodo.21759353` → [https://doi.org/10.5281/zenodo.21759353](https://doi.org/10.5281/zenodo.21759353)  
 - First Sub-ID: `10.5281/zenodo.21759354`  
-- Later Sub-ID (from GitHub Action): `10.5281/zenodo.21759414`
+- Later Sub-ID (from GitHub Action, v0.11.0): `10.5281/zenodo.22093110`
 
 **Link format to paste in markdown** (near the top of `spec/spec-head.md`):
 
@@ -51,6 +51,19 @@ Workflow file: `.github/workflows/zenodo-publish.yml`
 Trigger: publishing a GitHub **Release** (or manual `workflow_dispatch`).
 
 **Do not** run the Action for the first publish. It only does *updates*.
+
+### Copy the workflow to another Spec-Up-T repo
+
+Copy `.github/workflows/zenodo-publish.yml` **unchanged**. It has no hardcoded repo name or DOI.
+
+Then in **that** repo, under **Settings → Secrets and variables → Actions**:
+
+1. **Secret** `ZENODO_USER_API_TOKEN` — Zenodo user token (same token OK across repos if that user can manage those records).
+2. **Variable** (Variables tab, not Secrets) `ZENODO_SPEC_MAIN_DOI` — **that spec’s** Main ID only.
+
+Do not copy this test repo’s Main ID (`10.5281/zenodo.21759353`) into ACDC/CESR/KERI.
+
+The first Zenodo publish for that spec must already exist. After that, a GitHub Release is enough.
 
 ---
 
@@ -148,7 +161,7 @@ Use **one shared Zenodo service approach** (simplest for releasers):
   | `kswg-cesr-specification` | same shared token              | CESR Main ID only                                  |
   | `kswg-keri-specification` | same shared token              | KERI Main ID only                                  |
 
-5. Add `.github/workflows/zenodo-publish.yml` to each repo (or inherit via org template / boilerplate).
+5. Add `.github/workflows/zenodo-publish.yml` to each repo (copy unchanged from this test repo, or via boilerplate).
 
 After that, **Samuel or Philip** (or any other trusted releaser):
 
@@ -171,9 +184,10 @@ After that, **Samuel or Philip** (or any other trusted releaser):
 
 | Symptom                             | Likely cause                                                                     |
 | ----------------------------------- | -------------------------------------------------------------------------------- |
-| Release created, Action red         | Missing/wrong `ZENODO_USER_API_TOKEN` or `ZENODO_SPEC_MAIN_DOI` in **that** repo |
+| Release created, Action red         | Missing/wrong `ZENODO_USER_API_TOKEN` or `ZENODO_SPEC_MAIN_DOI` in **that** repo (Main DOI must be a **variable**) |
 | 403 / permission errors from Zenodo | Token’s Zenodo user lost **Can manage** on that record                           |
 | Wrong spec updated on Zenodo        | `ZENODO_SPEC_MAIN_DOI` in repo settings points at another spec                   |
+| “Empty files” / upload 400          | Stale workflow without the Python upload; or leftover draft — discard and re-run |
 
 
 Fix permissions or secrets once; releasers keep using GitHub Releases only.
@@ -296,19 +310,19 @@ This is where the token from **A2** goes. GitHub stores it **per repository**; t
    (other repos: `https://github.com/OWNER/REPO/settings/secrets/actions`)
 2. Under **Repository secrets**, click **New repository secret**.
 
-
+**Warning:** `ZENODO_SPEC_MAIN_DOI` is a **variable**, not a secret. If you create it as a secret, the Action will not see it and will fail with “Set variable ZENODO_SPEC_MAIN_DOI”.
 
 #### Secret (required) — bound to a **Zenodo user**
 
 
 | Name                    | Value                                                                                                                                                   |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ZENODO_USER_API_TOKEN` | Paste the token from **A2** (full string, no spaces). Same Zenodo user token may be reused in other spec repos if that user can manage those specs too. |
+| `ZENODO_USER_API_TOKEN` | Paste the token from **A2** (full string, no spaces, no trailing newline). Same Zenodo user token may be reused in other spec repos if that user can manage those specs too. |
 
 
 
 
-#### Variable (recommended) — bound to **this specification**
+#### Variable (required in practice) — bound to **this specification**
 
 Open the **Variables** tab on the same Settings page → **New repository variable**.
 
@@ -332,17 +346,15 @@ Prefer `ZENODO_SPEC_MAIN_DOI`. Then you do not need to bump `ZENODO_SPEC_LATEST_
 
 Confirm `.github/workflows/zenodo-publish.yml` exists on `main` (it does in this test repo).
 
-#### Migrating from old names (this test repo)
+#### Migrating from old names (this test repo only)
 
-If you still have the old secrets/variables, replace them:
-
+Skip this on a new spec repo. Only relevant if you still have names from an earlier draft of this workflow:
 
 | Old name               | New name                           | Type                                             |
 | ---------------------- | ---------------------------------- | ------------------------------------------------ |
 | `ZENODO_TOKEN`         | `ZENODO_USER_API_TOKEN`            | Secret                                           |
 | `ZENODO_CONCEPT_DOI`   | `ZENODO_SPEC_MAIN_DOI`             | Variable                                         |
 | `ZENODO_DEPOSITION_ID` | `ZENODO_SPEC_LATEST_DEPOSITION_ID` | Secret (optional; can delete if Main DOI is set) |
-
 
 Create the new ones with the same values, then delete the old ones. GitHub does not rename secrets in place.
 
@@ -399,6 +411,7 @@ gh run list --workflow=zenodo-publish.yml --limit 1
 - Don’t expect the Action to do the **first** publish.  
 - Don’t commit `ZENODO_USER_API_TOKEN` into the repo.  
 - Don’t overwrite files on an already-published Zenodo version as your normal update path.  
+- Don’t put `ZENODO_SPEC_MAIN_DOI` in **Secrets**. It must be a **Variable**.
 - Don’t put a new Sub-ID into the spec on every release if the Main ID is already there.
 
 ---
@@ -415,13 +428,26 @@ Error mentions `ZENODO_USER_API_TOKEN`, `ZENODO_SPEC_MAIN_DOI`, or deposition id
 
 → Re-do **A8**. Token scopes must include `deposit:write` and `deposit:actions`.
 
-### Action fails: upload HTTP 400
+### Action fails: “Set variable ZENODO_SPEC_MAIN_DOI”
 
-Often means: bad ZIP bytes, fragile bucket PUT, or a **stuck empty draft** from a previous failed run.
+The Main ID was stored as a **secret**, or the variable name is misspelled.
 
-1. Open https://zenodo.org/deposit/ → find the unpublished **New version** draft for this spec → **Discard**.  
-2. Ensure the fixed workflow is on `main` (multipart upload + ZIP sanity checks).  
-3. Re-run the failed Action, or publish a new release.
+→ **Settings → Secrets and variables → Actions → Variables** (not Secrets). Name must be exactly `ZENODO_SPEC_MAIN_DOI`. Value like `10.5281/zenodo.21759353`.
+
+### Action fails: “Please remove all files first” / cannot create new version
+
+An unpublished **New version** draft is leftover from a previous failed run. The current workflow tries to discard those automatically.
+
+If it still fails: https://zenodo.org/deposit/ → unpublished draft for this spec → **Discard** → re-run the Action.
+
+### Action fails: upload HTTP 400 / “Empty files are not accepted”
+
+The ZIP on the runner is fine; Zenodo rejected the **upload transport**. The current workflow uploads with Python (`Content-Length` + `application/octet-stream`) for that reason. Confirm `main` has that workflow, then:
+
+1. Discard any leftover unpublished draft (see above).
+2. Re-run the Action.
+
+This is **not** rate limiting. Rate limits return HTTP **429**.
 
 ### Action fails: 403 / permission denied from Zenodo
 
@@ -483,6 +509,7 @@ Use this on the Zenodo draft if you want zero thinking:
 | Main ID                          | [https://doi.org/10.5281/zenodo.21759353](https://doi.org/10.5281/zenodo.21759353)             |
 | First Sub-ID (`v0.1.0`, manual)  | [https://doi.org/10.5281/zenodo.21759354](https://doi.org/10.5281/zenodo.21759354)             |
 | Second Sub-ID (`v0.2.0`, Action) | [https://doi.org/10.5281/zenodo.21759414](https://doi.org/10.5281/zenodo.21759414)             |
+| Later Sub-ID (`v0.11.0`, Action) | [https://doi.org/10.5281/zenodo.22093110](https://doi.org/10.5281/zenodo.22093110)             |
 | Workflow                         | `.github/workflows/zenodo-publish.yml`                                                         |
 | Spec DOI line                    | `spec/spec-head.md`                                                                            |
 
@@ -503,8 +530,8 @@ npm run render   # or: npm run menu
 
 ## One-page summary
 
-1. **Once:** reserve DOI → paste Sub-ID in spec → release `v0.1.0` → upload ZIP on Zenodo → Publish → paste Main ID in spec → set `ZENODO_USER_API_TOKEN` (one Zenodo user) + `ZENODO_SPEC_MAIN_DOI` (this repo’s Main ID) in GitHub.
+1. **Once:** reserve DOI → paste Sub-ID in spec → release `v0.1.0` → upload ZIP on Zenodo → Publish → paste Main ID in spec → set secret `ZENODO_USER_API_TOKEN` + **variable** `ZENODO_SPEC_MAIN_DOI` (this repo’s Main ID).
 2. **Later:** anyone with GitHub Release permission creates a new release; the Action uses the **repo’s** secrets — not the releaser’s Zenodo login.
 3. **Cite forever:** the Main ID (`https://doi.org/10.5281/zenodo.…`).
-4. **Several specs (ACDC/CESR/KERI):** same `ZENODO_USER_API_TOKEN` optional if one Zenodo user manages all records; **different** `ZENODO_SPEC_MAIN_DOI` per repo.
+4. **Copy to another spec:** same YAML file; new secret/variable on that repo; different Main ID per spec.
 

@@ -128,6 +128,7 @@ jobs:
       - name: Create Zenodo new version, upload ZIP, publish
         env:
           ZENODO_USER_API_TOKEN: ${{ secrets.ZENODO_USER_API_TOKEN }}
+          ZENODO_SPEC_MAIN_DOI: ${{ vars.ZENODO_SPEC_MAIN_DOI }}
           DEPOSITION_ID: ${{ steps.zenodo.outputs.deposition_id }}
           ZIP_PATH: ${{ steps.release.outputs.zip_path }}
           ZIP_NAME: ${{ steps.release.outputs.zip_name }}
@@ -139,16 +140,28 @@ jobs:
 
           echo "Creating new version from deposition $DEPOSITION_ID ..."
           # Do not use curl -L on Zenodo API calls (redirects break PUT/POST).
-          PARENT=$(curl -fsS -H "$AUTH" "${API}/deposit/depositions/${DEPOSITION_ID}")
-          EXISTING=$(echo "$PARENT" | jq -r '.links.latest_draft // empty')
-          if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
-            EXISTING_ID="${EXISTING##*/}"
-            if [ "$EXISTING_ID" != "$DEPOSITION_ID" ]; then
-              echo "Discarding leftover unpublished draft $EXISTING_ID ..."
-              curl -sS -o /dev/null -w "discard_http=%{http_code}\n" -X POST -H "$AUTH" \
-                "${API}/deposit/depositions/${EXISTING_ID}/actions/discard" || true
-            fi
-          fi
+          CONCEPT_RECID="${ZENODO_SPEC_MAIN_DOI##*.}"
+          TITLE=$(curl -fsS -H "$AUTH" "${API}/deposit/depositions/${DEPOSITION_ID}" | jq -r '.metadata.title // empty')
+          echo "Discarding leftover unpublished drafts for concept $CONCEPT_RECID / title ${TITLE:-unknown} (if any) ..."
+          DEPOSITS=$(curl -fsS -H "$AUTH" "${API}/deposit/depositions?size=50")
+          echo "$DEPOSITS" | jq -r --arg c "$CONCEPT_RECID" --arg parent "$DEPOSITION_ID" --arg title "$TITLE" '
+                .[]
+                | select(.submitted == false)
+                | select((.id|tostring) != $parent)
+                | select(
+                    (.conceptrecid|tostring) == $c
+                    or ((.conceptdoi // "") | tostring | endswith($c))
+                    or ((.metadata.prereserve_doi.recid // "") | tostring) == $c
+                    or ($title != "" and .metadata.title == $title)
+                  )
+                | .id
+              ' \
+            | while read -r leftover; do
+                [ -z "$leftover" ] && continue
+                echo "Discarding leftover draft $leftover ..."
+                curl -sS -o /dev/null -w "discard_http=%{http_code}\n" -X POST -H "$AUTH" \
+                  "${API}/deposit/depositions/${leftover}/actions/discard" || true
+              done
 
           NEWVERSION_BODY=$(mktemp)
           NV_HTTP=$(curl -sS -o "$NEWVERSION_BODY" -w "%{http_code}" -X POST -H "$AUTH" \
@@ -157,6 +170,7 @@ jobs:
           if [ "$NV_HTTP" != "201" ] && [ "$NV_HTTP" != "200" ]; then
             echo "::error::Could not create Zenodo new version"
             cat "$NEWVERSION_BODY" || true
+            echo "::error::If a draft is stuck, open the Zenodo deposit page, Discard it, then re-run."
             exit 1
           fi
           NEWVERSION_JSON=$(cat "$NEWVERSION_BODY")

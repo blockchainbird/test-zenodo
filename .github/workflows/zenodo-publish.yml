@@ -172,43 +172,57 @@ jobs:
           DRAFT_JSON=$(curl -fsS -H "$AUTH" "${API}/deposit/depositions/${DRAFT_ID}")
           BUCKET=$(echo "$DRAFT_JSON" | jq -r '.links.bucket')
 
-          echo "Uploading $ZIP_PATH ($ZIP_NAME, $(wc -c < "$ZIP_PATH" | tr -d ' ') bytes) ..."
-          curl --version | head -1
+          echo "Uploading $ZIP_PATH ($ZIP_NAME, $(wc -c < "$ZIP_PATH" | tr -d ' ') bytes) via Python (explicit Content-Length) ..."
           file "$ZIP_PATH" || true
-
-          UPLOAD_BODY=$(mktemp)
-
-          # Primary: legacy files API. Requires BOTH multipart fields:
-          # "name" (target filename) and "file" (content).
-          HTTP=$(curl -sS -o "$UPLOAD_BODY" -w "%{http_code}" -H "$AUTH" \
-            -F "name=${ZIP_NAME}" \
-            -F "file=@${ZIP_PATH}" \
-            "${API}/deposit/depositions/${DRAFT_ID}/files" || true)
-          echo "files API upload HTTP $HTTP"
-
-          if [ "$HTTP" != "201" ] && [ "$HTTP" != "200" ]; then
-            echo "files API response:"
-            cat "$UPLOAD_BODY" || true
-            echo "Falling back to bucket PUT (verbose) ..."
-            if [ -z "$BUCKET" ] || [ "$BUCKET" = "null" ]; then
-              echo "::error::No bucket URL on draft $DRAFT_ID"
-              exit 1
-            fi
-            # Verbose so the exact request headers appear in the log
-            # (the token is a registered secret and gets masked).
-            HTTP=$(curl -sSv -o "$UPLOAD_BODY" -w "%{http_code}" -H "$AUTH" \
-              --upload-file "$ZIP_PATH" \
-              "${BUCKET}/${ZIP_NAME}" || true)
-            echo "bucket upload HTTP $HTTP"
-            if [ "$HTTP" != "201" ] && [ "$HTTP" != "200" ]; then
-              echo "::error::Zenodo upload failed"
-              cat "$UPLOAD_BODY" || true
-              echo "::error::If a draft is stuck empty, open https://zenodo.org/deposit/${DRAFT_ID} and Discard, then re-run."
-              exit 1
-            fi
+          if [ -z "$BUCKET" ] || [ "$BUCKET" = "null" ]; then
+            echo "::error::No bucket URL on draft $DRAFT_ID"
+            exit 1
           fi
-          cat "$UPLOAD_BODY" | jq . 2>/dev/null || cat "$UPLOAD_BODY"
-          rm -f "$UPLOAD_BODY"
+
+          # curl on GitHub-hosted runners (HTTP/2) makes Zenodo report
+          # "Empty files are not accepted" even when the ZIP is valid.
+          # Python http.client sends HTTP/1.1 with a real Content-Length.
+          export BUCKET DRAFT_ID
+          python3 - <<'PY'
+          import os
+          import sys
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          token = os.environ["ZENODO_USER_API_TOKEN"]
+          bucket = os.environ["BUCKET"]
+          zip_path = os.environ["ZIP_PATH"]
+          zip_name = os.environ["ZIP_NAME"]
+
+          with open(zip_path, "rb") as fh:
+              body = fh.read()
+          print(f"python read {len(body)} bytes from {zip_path}", flush=True)
+          if len(body) == 0:
+              print("::error::Local ZIP is empty; refusing to upload", file=sys.stderr)
+              sys.exit(1)
+
+          url = bucket.rstrip("/") + "/" + urllib.parse.quote(zip_name)
+          req = urllib.request.Request(url, data=body, method="PUT")
+          req.add_header("Authorization", f"Bearer {token}")
+          req.add_header("Content-Length", str(len(body)))
+          req.add_header("Accept", "application/json")
+
+          try:
+              with urllib.request.urlopen(req, timeout=120) as resp:
+                  raw = resp.read().decode("utf-8", errors="replace")
+                  print(f"python upload HTTP {resp.status}", flush=True)
+                  print(raw, flush=True)
+          except urllib.error.HTTPError as err:
+              raw = err.read().decode("utf-8", errors="replace")
+              print(f"python upload HTTP {err.code}", flush=True)
+              print(raw, flush=True)
+              print(
+                  f"::error::If a draft is stuck empty, open https://zenodo.org/deposit/{os.environ.get('DRAFT_ID', '')} and Discard, then re-run.",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+          PY
 
           # Bump version metadata when present.
           META=$(echo "$DRAFT_JSON" | jq --arg v "$TAG" '

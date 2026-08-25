@@ -139,8 +139,28 @@ jobs:
 
           echo "Creating new version from deposition $DEPOSITION_ID ..."
           # Do not use curl -L on Zenodo API calls (redirects break PUT/POST).
-          NEWVERSION_JSON=$(curl -fsS -X POST -H "$AUTH" \
-            "${API}/deposit/depositions/${DEPOSITION_ID}/actions/newversion")
+          PARENT=$(curl -fsS -H "$AUTH" "${API}/deposit/depositions/${DEPOSITION_ID}")
+          EXISTING=$(echo "$PARENT" | jq -r '.links.latest_draft // empty')
+          if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
+            EXISTING_ID="${EXISTING##*/}"
+            if [ "$EXISTING_ID" != "$DEPOSITION_ID" ]; then
+              echo "Discarding leftover unpublished draft $EXISTING_ID ..."
+              curl -sS -o /dev/null -w "discard_http=%{http_code}\n" -X POST -H "$AUTH" \
+                "${API}/deposit/depositions/${EXISTING_ID}/actions/discard" || true
+            fi
+          fi
+
+          NEWVERSION_BODY=$(mktemp)
+          NV_HTTP=$(curl -sS -o "$NEWVERSION_BODY" -w "%{http_code}" -X POST -H "$AUTH" \
+            "${API}/deposit/depositions/${DEPOSITION_ID}/actions/newversion" || true)
+          echo "newversion HTTP $NV_HTTP"
+          if [ "$NV_HTTP" != "201" ] && [ "$NV_HTTP" != "200" ]; then
+            echo "::error::Could not create Zenodo new version"
+            cat "$NEWVERSION_BODY" || true
+            exit 1
+          fi
+          NEWVERSION_JSON=$(cat "$NEWVERSION_BODY")
+          rm -f "$NEWVERSION_BODY"
 
           DRAFT_URL=$(echo "$NEWVERSION_JSON" | jq -r '.links.latest_draft')
           if [ -z "$DRAFT_URL" ] || [ "$DRAFT_URL" = "null" ]; then

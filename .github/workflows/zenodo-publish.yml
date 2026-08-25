@@ -134,7 +134,7 @@ jobs:
           TAG: ${{ steps.release.outputs.tag }}
         run: |
           set -euo pipefail
-          AUTH="Authorization: Bearer ${ZENODO_USER_API_TOKEN}"
+          AUTH="Authorization: Bearer ${ZENODO_USER_API_TOKEN//$'\n'/}"
           API="https://zenodo.org/api"
 
           echo "Creating new version from deposition $DEPOSITION_ID ..."
@@ -190,8 +190,8 @@ jobs:
           import urllib.parse
           import urllib.request
 
-          token = os.environ["ZENODO_USER_API_TOKEN"]
-          bucket = os.environ["BUCKET"]
+          token = os.environ["ZENODO_USER_API_TOKEN"].strip()
+          bucket = os.environ["BUCKET"].strip()
           zip_path = os.environ["ZIP_PATH"]
           zip_name = os.environ["ZIP_NAME"]
 
